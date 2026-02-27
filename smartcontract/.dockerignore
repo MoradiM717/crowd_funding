@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build artifacts (we compile in Docker)
+cache/
+artifacts/
+typechain/
+typechain-types/
+
+# Coverage
+coverage/
+coverage.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation
+README.md
+SETUP.md
+*.md
+prompt.txt
+
+# Environment
+.env
+.env.*

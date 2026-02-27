@@ -1,0 +1,32 @@
+# =============================================================================
+# Hardhat Node Dockerfile - Local Blockchain
+# =============================================================================
+# This image runs a persistent Hardhat node that serves as the local blockchain.
+# It does NOT persist state - each container restart is a fresh blockchain.
+# =============================================================================
+FROM node:20-alpine
+
+# Install curl for health checks
+RUN apk add --no-cache curl
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source files
+COPY . .
+
+# Compile contracts (pre-compile for faster startup)
+RUN npm run compile
+
+# Expose Hardhat node port
+EXPOSE 8545
+
+# Start Hardhat node
+# --hostname 0.0.0.0 makes it accessible from other containers
+CMD ["npx", "hardhat", "node", "--hostname", "0.0.0.0"]

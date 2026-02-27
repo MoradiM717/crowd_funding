@@ -1,0 +1,31 @@
+# =============================================================================
+# Contract Deployer Dockerfile - One-time Deployment Job
+# =============================================================================
+# This image deploys the smart contracts to the Hardhat node.
+# It runs once and exits after deployment is complete.
+# =============================================================================
+FROM node:20-alpine
+
+# Install curl for connectivity checks
+RUN apk add --no-cache curl bash
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Copy source files
+COPY . .
+
+# Compile contracts
+RUN npm run compile
+
+# Make deploy script executable
+RUN chmod +x /app/deploy-and-exit.sh
+
+# Run deploy script
+CMD ["/app/deploy-and-exit.sh"]

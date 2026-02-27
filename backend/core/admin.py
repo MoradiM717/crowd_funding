@@ -1,0 +1,608 @@
+
+import json
+import logging
+from django.contrib import admin
+from django.utils.html import format_html
+from django.utils.safestring import mark_safe
+from django.conf import settings
+from core.models import Chain, SyncState, Campaign, Contribution, Event, CampaignMetadata, Profile
+from core.utils.formatting import wei_to_eth, timestamp_to_datetime
+
+logger = logging.getLogger(__name__)
+
+                      
+admin.site.site_header = "Crowdfunding Backend Administration"
+admin.site.site_title = "Crowdfunding Admin"
+admin.site.index_title = "Welcome to Crowdfunding Backend Administration"
+
+
+@admin.register(Chain)
+class ChainAdmin(admin.ModelAdmin):
+    
+    list_display = ['id', 'name', 'chain_id', 'rpc_url', 'created_at', 'updated_at']
+    list_filter = ['chain_id']
+    search_fields = ['name', 'chain_id']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+    
+    fieldsets = (
+        ('Chain Info', {
+            'fields': ('id', 'name', 'chain_id', 'rpc_url')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(SyncState)
+class SyncStateAdmin(admin.ModelAdmin):
+    
+    list_display = ['chain_id', 'chain_name', 'last_block', 'last_block_hash_short', 'updated_at']
+    list_filter = ['chain_id']
+    search_fields = ['chain_id', 'last_block_hash']
+    readonly_fields = ['chain_id', 'updated_at']
+    actions = ['reset_to_zero', 'reset_to_block_1']
+    
+    fieldsets = (
+        ('Sync Info', {
+            'fields': ('chain_id', 'last_block', 'last_block_hash')
+        }),
+        ('Timestamps', {
+            'fields': ('updated_at',),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def chain_name(self, obj):
+        return obj.chain.name if obj.chain else 'N/A'
+    chain_name.short_description = 'Chain Name'
+    
+    def last_block_hash_short(self, obj):
+        if obj.last_block_hash:
+            return f"{obj.last_block_hash[:10]}...{obj.last_block_hash[-8:]}"
+        return 'N/A'
+    last_block_hash_short.short_description = 'Last Block Hash'
+    
+    @admin.action(description='Reset sync state to block 0')
+    def reset_to_zero(self, request, queryset):
+        updated = queryset.update(last_block=0, last_block_hash='')
+        self.message_user(request, f'Reset {updated} sync state(s) to block 0.')
+    
+    @admin.action(description='Reset sync state to block 1')
+    def reset_to_block_1(self, request, queryset):
+        updated = queryset.update(last_block=1, last_block_hash='')
+        self.message_user(request, f'Reset {updated} sync state(s) to block 1.')
+
+
+@admin.register(Campaign)
+class CampaignAdmin(admin.ModelAdmin):
+    
+    list_display = [
+        'address_short',
+        'status',
+        'creator_address_short',
+        'goal_eth',
+        'total_raised_eth',
+        'progress_percent',
+        'deadline_datetime',
+        'withdrawn',
+        'created_at'
+    ]
+    list_filter = ['status', 'withdrawn', 'factory_address']
+    search_fields = ['address', 'creator_address', 'factory_address', 'cid']
+    list_editable = ['status', 'withdrawn']
+    readonly_fields = [
+        'address',
+        'factory_address',
+        'creator_address',
+        'goal_eth',
+        'deadline_datetime',
+        'total_raised_eth',
+        'progress_percent',
+        'withdrawn_amount_eth',
+        'created_at',
+        'updated_at'
+    ]
+    
+    fieldsets = (
+        ('Campaign Info', {
+            'fields': ('address', 'factory_address', 'creator_address', 'cid', 'status')
+        }),
+        ('Funding (Editable)', {
+            'fields': (
+                ('goal_wei', 'goal_eth'),
+                ('total_raised_wei', 'total_raised_eth'),
+                'progress_percent'
+            )
+        }),
+        ('Withdrawal (Editable)', {
+            'fields': ('withdrawn', ('withdrawn_amount_wei', 'withdrawn_amount_eth'))
+        }),
+        ('Timeline', {
+            'fields': (('deadline_ts', 'deadline_datetime'), 'created_at', 'updated_at')
+        }),
+    )
+    
+    def address_short(self, obj):
+        return f"{obj.address[:10]}...{obj.address[-6:]}"
+    address_short.short_description = 'Address'
+    
+    def creator_address_short(self, obj):
+        return f"{obj.creator_address[:10]}...{obj.creator_address[-6:]}"
+    creator_address_short.short_description = 'Creator'
+    
+    def goal_eth(self, obj):
+        if obj.goal_wei:
+            return f"{wei_to_eth(obj.goal_wei):.6f} ETH"
+        return "0 ETH"
+    goal_eth.short_description = 'Goal (ETH)'
+    
+    def total_raised_eth(self, obj):
+        if obj.total_raised_wei:
+            return f"{wei_to_eth(obj.total_raised_wei):.6f} ETH"
+        return "0 ETH"
+    total_raised_eth.short_description = 'Total Raised (ETH)'
+    
+    def progress_percent(self, obj):
+        if obj.goal_wei and obj.goal_wei > 0:
+            percent = (obj.total_raised_wei / obj.goal_wei) * 100
+            color = 'green' if percent >= 100 else 'orange' if percent >= 50 else 'red'
+                                                            
+            percent_str = f"{percent:.2f}%"
+            return format_html(
+                '<span style="color: {};">{}</span>',
+                color,
+                percent_str
+            )
+        return "0%"
+    progress_percent.short_description = 'Progress'
+    
+    def deadline_datetime(self, obj):
+        dt = timestamp_to_datetime(obj.deadline_ts)
+        if dt:
+            return dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+        return 'N/A'
+    deadline_datetime.short_description = 'Deadline'
+    
+    def withdrawn_amount_eth(self, obj):
+        if obj.withdrawn_amount_wei:
+            return f"{wei_to_eth(obj.withdrawn_amount_wei):.6f} ETH"
+        return "0 ETH"
+    withdrawn_amount_eth.short_description = 'Withdrawn Amount (ETH)'
+    
+    actions = ['mark_active', 'mark_failed', 'mark_success', 'reset_totals']
+    
+    @admin.action(description='Mark selected campaigns as ACTIVE')
+    def mark_active(self, request, queryset):
+        updated = queryset.update(status='ACTIVE')
+        self.message_user(request, f'Marked {updated} campaign(s) as ACTIVE.')
+    
+    @admin.action(description='Mark selected campaigns as FAILED')
+    def mark_failed(self, request, queryset):
+        updated = queryset.update(status='FAILED')
+        self.message_user(request, f'Marked {updated} campaign(s) as FAILED.')
+    
+    @admin.action(description='Mark selected campaigns as SUCCESS')
+    def mark_success(self, request, queryset):
+        updated = queryset.update(status='SUCCESS')
+        self.message_user(request, f'Marked {updated} campaign(s) as SUCCESS.')
+    
+    @admin.action(description='Reset total_raised_wei to 0')
+    def reset_totals(self, request, queryset):
+        updated = queryset.update(total_raised_wei=0)
+        self.message_user(request, f'Reset totals for {updated} campaign(s).')
+
+
+@admin.register(Contribution)
+class ContributionAdmin(admin.ModelAdmin):
+    
+    list_display = [
+        'id',
+        'campaign_address',
+        'donor_address_short',
+        'contributed_eth',
+        'refunded_eth',
+        'net_contributed_eth',
+        'created_at'
+    ]
+    list_filter = ['campaign_address']
+    search_fields = ['campaign_address__address', 'donor_address']
+    readonly_fields = [
+        'id',
+        'contributed_eth',
+        'refunded_eth',
+        'net_contributed_eth',
+        'created_at',
+        'updated_at'
+    ]
+    
+    fieldsets = (
+        ('Contribution Info', {
+            'fields': ('id', 'campaign_address', 'donor_address')
+        }),
+        ('Amounts (Editable)', {
+            'fields': (
+                ('contributed_wei', 'contributed_eth'),
+                ('refunded_wei', 'refunded_eth'),
+                'net_contributed_eth'
+            )
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def donor_address_short(self, obj):
+        return f"{obj.donor_address[:10]}...{obj.donor_address[-6:]}"
+    donor_address_short.short_description = 'Donor'
+    
+    def contributed_eth(self, obj):
+        if obj.contributed_wei:
+            return f"{wei_to_eth(obj.contributed_wei):.6f} ETH"
+        return "0 ETH"
+    contributed_eth.short_description = 'Contributed (ETH)'
+    
+    def refunded_eth(self, obj):
+        if obj.refunded_wei:
+            return f"{wei_to_eth(obj.refunded_wei):.6f} ETH"
+        return "0 ETH"
+    refunded_eth.short_description = 'Refunded (ETH)'
+    
+    def net_contributed_eth(self, obj):
+        net_wei = obj.contributed_wei - obj.refunded_wei
+        if net_wei > 0:
+            return f"{wei_to_eth(net_wei):.6f} ETH"
+        return "0 ETH"
+    net_contributed_eth.short_description = 'Net Contribution (ETH)'
+
+
+@admin.register(Event)
+class EventAdmin(admin.ModelAdmin):
+    
+    list_display = [
+        'id',
+        'chain_id',
+        'event_name',
+        'address_short',
+        'block_number',
+        'tx_hash_short',
+        'log_index',
+        'removed',
+        'created_at'
+    ]
+    list_filter = ['event_name', 'removed', 'chain_id']
+    search_fields = ['tx_hash', 'address__address', 'event_name']
+    list_editable = ['removed']
+    readonly_fields = [
+        'id',
+        'formatted_event_data',
+        'created_at'
+    ]
+    
+    fieldsets = (
+        ('Event Info', {
+            'fields': ('id', 'chain_id', 'event_name', 'removed')
+        }),
+        ('Blockchain Data (Editable)', {
+            'fields': ('tx_hash', 'log_index', 'block_number', 'block_hash', 'address')
+        }),
+        ('Event Data', {
+            'fields': ('event_data', 'formatted_event_data')
+        }),
+        ('Timestamps', {
+            'fields': ('created_at',),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def address_short(self, obj):
+        if obj.address:
+            addr = str(obj.address.address) if hasattr(obj.address, 'address') else str(obj.address)
+            return f"{addr[:10]}...{addr[-6:]}"
+        return 'N/A'
+    address_short.short_description = 'Address'
+    
+    def tx_hash_short(self, obj):
+        if obj.tx_hash:
+            return f"{obj.tx_hash[:10]}...{obj.tx_hash[-8:]}"
+        return 'N/A'
+    tx_hash_short.short_description = 'TX Hash'
+    
+    def formatted_event_data(self, obj):
+        if not obj.event_data:
+            return 'No event data'
+        
+        try:
+            data = json.loads(obj.event_data)
+            formatted = json.dumps(data, indent=2)
+            return format_html('<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px;">{}</pre>', formatted)
+        except json.JSONDecodeError:
+            return format_html('<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px;">{}</pre>', obj.event_data)
+    formatted_event_data.short_description = 'Event Data (JSON)'
+    
+    actions = ['mark_removed', 'mark_not_removed', 'delete_selected_events']
+    
+    @admin.action(description='Mark selected events as removed')
+    def mark_removed(self, request, queryset):
+        updated = queryset.update(removed=True)
+        self.message_user(request, f'Marked {updated} event(s) as removed.')
+    
+    @admin.action(description='Mark selected events as NOT removed')
+    def mark_not_removed(self, request, queryset):
+        updated = queryset.update(removed=False)
+        self.message_user(request, f'Marked {updated} event(s) as not removed.')
+    
+    @admin.action(description='Delete selected events')
+    def delete_selected_events(self, request, queryset):
+        count = queryset.count()
+        queryset.delete()
+        self.message_user(request, f'Deleted {count} event(s).')
+
+
+@admin.register(CampaignMetadata)
+class CampaignMetadataAdmin(admin.ModelAdmin):
+    
+    list_display = [
+        'id',
+        'campaign_address_short',
+        'name',
+        'category',
+        'image_preview',
+        'ipfs_fetched_at',
+        'updated_at'
+    ]
+    list_filter = ['category', 'ipfs_fetched_at']
+    search_fields = ['campaign__address', 'name', 'description', 'creator_name']
+    readonly_fields = [
+        'id',
+        'campaign',
+        'cid',
+        'image_preview_large',
+        'banner_preview',
+        'formatted_raw_json',
+        'ipfs_fetched_at',
+        'created_at',
+        'updated_at'
+    ]
+    
+    fieldsets = (
+        ('Campaign', {
+            'fields': ('id', 'campaign', 'cid')
+        }),
+        ('Basic Info', {
+            'fields': ('name', 'short_description', 'description', 'category', 'tags', 'location')
+        }),
+        ('Media', {
+            'fields': (
+                ('image_cid', 'image_preview_large'),
+                ('banner_cid', 'banner_preview')
+            )
+        }),
+        ('Creator Info', {
+            'fields': ('creator_name', 'creator_avatar_cid')
+        }),
+        ('Social Links', {
+            'fields': ('website_url', 'twitter_handle', 'discord_url')
+        }),
+        ('Raw Data', {
+            'fields': ('formatted_raw_json',),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('ipfs_fetched_at', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    actions = ['refresh_metadata_from_ipfs', 'clear_metadata_cache']
+    
+    def campaign_address_short(self, obj):
+        addr = obj.campaign.address
+        return f"{addr[:10]}...{addr[-6:]}"
+    campaign_address_short.short_description = 'Campaign'
+    
+    def _get_gateway_url(self):
+        gateway = getattr(settings, 'IPFS_GATEWAY_URL', 'https://ipfs.io/ipfs/')
+        if not gateway.endswith('/'):
+            gateway += '/'
+        return gateway
+    
+    def _resolve_ipfs_url(self, cid):
+        if not cid:
+            return None
+        if cid.startswith('ipfs://'):
+            cid = cid[7:]
+        return f"{self._get_gateway_url()}{cid}"
+    
+    def image_preview(self, obj):
+        if obj.image_cid:
+            url = self._resolve_ipfs_url(obj.image_cid)
+            return format_html(
+                '<img src="{}" style="max-height: 50px; max-width: 80px; object-fit: cover;" />',
+                url
+            )
+        return '-'
+    image_preview.short_description = 'Image'
+    
+    def image_preview_large(self, obj):
+        if obj.image_cid:
+            url = self._resolve_ipfs_url(obj.image_cid)
+            return format_html(
+                '<img src="{}" style="max-height: 200px; max-width: 300px; object-fit: contain;" /><br/><a href="{}" target="_blank">Open in new tab</a>',
+                url, url
+            )
+        return 'No image'
+    image_preview_large.short_description = 'Image Preview'
+    
+    def banner_preview(self, obj):
+        if obj.banner_cid:
+            url = self._resolve_ipfs_url(obj.banner_cid)
+            return format_html(
+                '<img src="{}" style="max-height: 100px; max-width: 400px; object-fit: contain;" /><br/><a href="{}" target="_blank">Open in new tab</a>',
+                url, url
+            )
+        return 'No banner'
+    banner_preview.short_description = 'Banner Preview'
+    
+    def formatted_raw_json(self, obj):
+        if not obj.raw_json:
+            return 'No raw data'
+        
+        try:
+            formatted = json.dumps(obj.raw_json, indent=2)
+            return format_html(
+                '<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px; max-height: 400px; overflow: auto;">{}</pre>',
+                formatted
+            )
+        except (TypeError, ValueError):
+            return format_html(
+                '<pre style="background: #f5f5f5; padding: 10px; border-radius: 4px;">{}</pre>',
+                str(obj.raw_json)
+            )
+    formatted_raw_json.short_description = 'Raw JSON Data'
+    
+    @admin.action(description='Refresh metadata from IPFS')
+    def refresh_metadata_from_ipfs(self, request, queryset):
+        from core.services.metadata_resolver import MetadataResolver, MetadataFetchError
+        
+        resolver = MetadataResolver()
+        success_count = 0
+        error_count = 0
+        
+        for metadata in queryset:
+            try:
+                resolver.refresh(metadata.campaign.address)
+                success_count += 1
+            except MetadataFetchError as e:
+                logger.error(f"Failed to refresh metadata for {metadata.campaign.address}: {e}")
+                error_count += 1
+        
+        if success_count > 0:
+            self.message_user(request, f'Successfully refreshed {success_count} metadata record(s).')
+        if error_count > 0:
+            self.message_user(request, f'Failed to refresh {error_count} metadata record(s).', level='ERROR')
+    
+    @admin.action(description='Clear metadata cache (delete selected)')
+    def clear_metadata_cache(self, request, queryset):
+        count = queryset.count()
+        queryset.delete()
+        self.message_user(request, f'Cleared {count} metadata record(s) from cache.')
+
+
+@admin.register(Profile)
+class ProfileAdmin(admin.ModelAdmin):
+    
+    list_display = [
+        'wallet_address_short',
+        'display_name',
+        'avatar_preview',
+        'has_bio',
+        'website',
+        'twitter_handle',
+        'nonce_valid',
+        'created_at',
+        'updated_at'
+    ]
+    list_filter = ['created_at', 'updated_at']
+    search_fields = ['wallet_address', 'display_name', 'bio']
+    readonly_fields = [
+        'wallet_address',
+        'nonce',
+        'nonce_generated_at',
+        'nonce_valid',
+        'avatar_preview_large',
+        'created_at',
+        'updated_at'
+    ]
+    
+    fieldsets = (
+        ('Wallet', {
+            'fields': ('wallet_address',)
+        }),
+        ('Profile Info', {
+            'fields': ('display_name', 'bio', ('avatar_cid', 'avatar_preview_large'))
+        }),
+        ('Links', {
+            'fields': ('website', 'twitter_handle')
+        }),
+        ('Authentication', {
+            'fields': ('nonce', 'nonce_generated_at', 'nonce_valid'),
+            'classes': ('collapse',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def wallet_address_short(self, obj):
+        return f"{obj.wallet_address[:10]}...{obj.wallet_address[-6:]}"
+    wallet_address_short.short_description = 'Wallet'
+    
+    def has_bio(self, obj):
+        return bool(obj.bio)
+    has_bio.boolean = True
+    has_bio.short_description = 'Bio'
+    
+    def nonce_valid(self, obj):
+        return obj.is_nonce_valid()
+    nonce_valid.boolean = True
+    nonce_valid.short_description = 'Nonce Valid'
+    
+    def _get_gateway_url(self):
+        gateway = getattr(settings, 'IPFS_GATEWAY_URL', 'https://ipfs.io/ipfs/')
+        if not gateway.endswith('/'):
+            gateway += '/'
+        return gateway
+    
+    def _resolve_ipfs_url(self, cid):
+        if not cid:
+            return None
+        if cid.startswith('ipfs://'):
+            cid = cid[7:]
+        return f"{self._get_gateway_url()}{cid}"
+    
+    def avatar_preview(self, obj):
+        if obj.avatar_cid:
+            url = self._resolve_ipfs_url(obj.avatar_cid)
+            return format_html(
+                '<img src="{}" style="max-height: 40px; max-width: 40px; border-radius: 50%; object-fit: cover;" />',
+                url
+            )
+        return '-'
+    avatar_preview.short_description = 'Avatar'
+    
+    def avatar_preview_large(self, obj):
+        if obj.avatar_cid:
+            url = self._resolve_ipfs_url(obj.avatar_cid)
+            return format_html(
+                '<img src="{}" style="max-height: 150px; max-width: 150px; border-radius: 50%; object-fit: cover;" /><br/><a href="{}" target="_blank">Open in new tab</a>',
+                url, url
+            )
+        return 'No avatar'
+    avatar_preview_large.short_description = 'Avatar Preview'
+    
+    actions = ['regenerate_nonce', 'clear_profiles']
+    
+    @admin.action(description='Regenerate nonce for selected profiles')
+    def regenerate_nonce(self, request, queryset):
+        import secrets
+        from django.utils import timezone
+        
+        count = 0
+        for profile in queryset:
+            profile.nonce = secrets.token_hex(16)
+            profile.nonce_generated_at = timezone.now()
+            profile.save(update_fields=['nonce', 'nonce_generated_at'])
+            count += 1
+        
+        self.message_user(request, f'Regenerated nonce for {count} profile(s).')
+    
+    @admin.action(description='Delete selected profiles')
+    def clear_profiles(self, request, queryset):
+        count = queryset.count()
+        queryset.delete()
+        self.message_user(request, f'Deleted {count} profile(s).')
+
